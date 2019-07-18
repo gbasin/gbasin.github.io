@@ -1,0 +1,47 @@
+@font-face {
+  font-family: "DINOT-Light";
+  font-weight: 200;
+  src: url(/assets/fonts/DINOT-Light.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "DINOT";
+  font-weight: 400;
+  src: url(/assets/fonts/DINOT.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "DINOT-Medium";
+  font-weight: 500;
+  src: url(/assets/fonts/DINOT-Medium.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "DINOT-Bold";
+  font-weight: 700;
+  src: url(/assets/fonts/DINOT-Bold.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Biwa-Light";
+  font-weight: 200;
+  src: url(/assets/fonts/hinted-Biwa-Light.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Biwa-Regular";
+  font-weight: 400;
+  src: url(/assets/fonts/hinted-Biwa-Regular.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Biwa-Medium";
+  font-weight: 500;
+  src: url(/assets/fonts/hinted-Biwa-Medium.woff2) format("woff2");
+}
+
+@font-face {
+  font-family: "Biwa-Bold";
+  font-weight: 700;
+  src: url(/assets/fonts/hinted-Biwa-Bold.woff2) format("woff2");
+}
