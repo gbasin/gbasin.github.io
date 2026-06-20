@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atrium · Agent Workspace Architecture</title>
+<meta name="description" content="How a fleet of AI agents and their human supervisors share a durable, versioned workspace — when every agent runs in a sandbox nothing can connect into.">
+<style>
+  :root{
+    --ink:#15171c; --ink-soft:#3a3f4b; --muted:#6b7280; --faint:#9aa1ad;
+    --paper:#fbfaf7; --card:#ffffff; --line:#e7e4dc; --line-soft:#efece5;
+    --accent:#3b5bdb; --accent-soft:#eaeeff; --accent-ink:#243a9e;
+    --teal:#0c8599; --teal-soft:#e3f7fa;
+    --amber:#b56309; --amber-soft:#fbf1e0;
+    --green:#2b8a3e; --green-soft:#e8f5ea;
+    --code-bg:#f4f2ec;
+    --maxw:780px;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--sans); font-size:17px; line-height:1.65;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* layout */
+  .wrap{display:grid; grid-template-columns:260px minmax(0,1fr); gap:0; max-width:1180px; margin:0 auto;}
+  nav.toc{
+    position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
+    padding:38px 22px 38px 28px; border-right:1px solid var(--line); font-size:13.5px;
+  }
+  nav.toc .brand{font-weight:700; letter-spacing:-.01em; font-size:15px; color:var(--ink); margin-bottom:2px}
+  nav.toc .brand span{color:var(--accent)}
+  nav.toc .tag{color:var(--faint); font-size:12px; margin-bottom:22px}
+  nav.toc ol{list-style:none; margin:0; padding:0; counter-reset:s}
+  nav.toc li{counter-increment:s; margin:1px 0}
+  nav.toc a{display:block; color:var(--muted); padding:5px 10px; border-radius:7px; line-height:1.35}
+  nav.toc a::before{content:counter(s) "."; color:var(--faint); margin-right:8px; font-variant-numeric:tabular-nums}
+  nav.toc a:hover{background:var(--line-soft); color:var(--ink); text-decoration:none}
+  nav.toc a.active{background:var(--accent-soft); color:var(--accent-ink); font-weight:600}
+
+  main{padding:0 0 120px}
+  .col{max-width:var(--maxw); margin:0 auto; padding:0 28px}
+
+  /* hero */
+  header.hero{
+    background:linear-gradient(165deg,#16181d 0%,#1f2330 60%,#243a6b 140%);
+    color:#eef0f5; padding:74px 0 64px; margin-bottom:8px;
+  }
+  header.hero .col{max-width:var(--maxw)}
+  .kicker{font-family:var(--mono); font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; color:#8ea2e6; margin:0 0 14px}
+  header.hero h1{font-size:40px; line-height:1.12; letter-spacing:-.025em; margin:0 0 18px; font-weight:740}
+  header.hero p.lede{font-size:19px; line-height:1.55; color:#c6cad6; margin:0 0 26px; max-width:62ch}
+  .meta-row{display:flex; flex-wrap:wrap; gap:8px}
+  .pill{font-size:12.5px; padding:5px 11px; border-radius:999px; border:1px solid #3a4054; color:#aeb6c8; background:#ffffff0a}
+  .pill b{color:#dfe3ec; font-weight:600}
+
+  /* sections */
+  section{padding:46px 0 4px; border-top:1px solid var(--line-soft)}
+  section:first-of-type{border-top:none}
+  h2{font-size:26px; line-height:1.2; letter-spacing:-.02em; margin:0 0 6px; font-weight:700}
+  h2 .num{color:var(--accent); font-family:var(--mono); font-size:16px; font-weight:600; margin-right:10px; vertical-align:2px}
+  h3{font-size:18px; margin:30px 0 8px; letter-spacing:-.01em}
+  p{margin:14px 0}
+  .sub{color:var(--muted); font-size:16px; margin-top:2px}
+  strong{font-weight:650; color:var(--ink)}
+  code{font-family:var(--mono); font-size:.86em; background:var(--code-bg); padding:1.5px 6px; border-radius:5px; color:#3a2f6b}
+  ul,ol{padding-left:22px} li{margin:7px 0}
+
+  /* callouts */
+  .note{border:1px solid var(--line); border-left-width:4px; border-radius:10px; padding:14px 18px; margin:22px 0; background:var(--card); font-size:15.5px}
+  .note .lbl{font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; font-weight:700; display:block; margin-bottom:5px}
+  .note.decision{border-left-color:var(--accent)} .note.decision .lbl{color:var(--accent-ink)}
+  .note.limit{border-left-color:var(--amber); background:var(--amber-soft)} .note.limit .lbl{color:var(--amber)}
+  .note.key{border-left-color:var(--teal)} .note.key .lbl{color:var(--teal)}
+
+  /* tables */
+  .tbl{width:100%; border-collapse:collapse; margin:22px 0; font-size:14.5px; display:block; overflow-x:auto}
+  .tbl table{width:100%; border-collapse:collapse}
+  .tbl th,.tbl td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  .tbl th{font-size:12px; letter-spacing:.03em; text-transform:uppercase; color:var(--muted); font-weight:650; background:var(--line-soft)}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl td code{font-size:.8em}
+
+  /* diagrams */
+  .fig{margin:26px 0; padding:22px; background:var(--card); border:1px solid var(--line); border-radius:14px}
+  .fig .cap{font-size:13px; color:var(--muted); margin-top:14px; text-align:center}
+  .stack{display:flex; flex-direction:column; gap:0; font-family:var(--mono); font-size:13px; max-width:440px; margin:0 auto}
+  .layer{padding:11px 16px; border:1px solid var(--line); text-align:center}
+  .layer:not(:last-child){border-bottom:none}
+  .layer.merged{background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); font-weight:600; border-radius:10px 10px 0 0}
+  .layer.upper{background:var(--green-soft); border-color:#bfe0c5}
+  .layer.lower{background:var(--code-bg); color:var(--muted); border-radius:0 0 10px 10px}
+  .layer small{color:var(--muted); font-weight:400}
+
+  .flow{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; font-size:13px; justify-content:center}
+  .box{flex:1 1 0; min-width:120px; background:var(--card); border:1px solid var(--line); border-radius:11px; padding:13px 12px; text-align:center}
+  .box .t{font-weight:650; font-size:13.5px; margin-bottom:3px}
+  .box .d{color:var(--muted); font-size:12px; line-height:1.4}
+  .box.node{background:var(--accent-soft); border-color:#c3cdf5}
+  .box.store{background:var(--teal-soft); border-color:#bfe6ec}
+  .arrow{display:flex; align-items:center; color:var(--faint); font-size:20px; padding:0 6px}
+  @media(max-width:560px){ .arrow{transform:rotate(90deg); padding:4px 0} .flow{flex-direction:column} }
+
+  .grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:22px 0}
+  @media(max-width:600px){.grid3{grid-template-columns:1fr}}
+  .gcard{border:1px solid var(--line); border-radius:12px; padding:15px 16px; background:var(--card)}
+  .gcard .h{font-weight:700; font-size:14px; margin-bottom:6px; display:flex; align-items:center; gap:7px}
+  .gcard .h .dot{width:9px; height:9px; border-radius:50%}
+  .gcard p{margin:6px 0 0; font-size:14px; color:var(--ink-soft); line-height:1.5}
+  .buy .dot{background:var(--teal)} .borrow .dot{background:var(--amber)} .build .dot{background:var(--accent)}
+
+  .legend{display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--muted); margin:8px 0 0}
+  .legend span{display:inline-flex; align-items:center; gap:6px}
+  .legend i{width:10px; height:10px; border-radius:3px; display:inline-block}
+
+  footer{border-top:1px solid var(--line); margin-top:50px; padding:30px 0; color:var(--muted); font-size:13.5px}
+  .status-dot{display:inline-block; width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  .built{background:var(--green)} .designed{background:var(--amber)} .partial{background:var(--accent)}
+
+  @media(max-width:880px){
+    .wrap{grid-template-columns:1fr}
+    nav.toc{position:static; height:auto; border-right:none; border-bottom:1px solid var(--line); padding:20px 24px;
+            display:flex; flex-direction:column}
+    nav.toc ol{columns:2; column-gap:18px}
+    header.hero h1{font-size:32px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav class="toc" id="toc">
+  <div class="brand"><span>Atrium</span> · Architecture</div>
+  <div class="tag">Agent workspace design</div>
+  <ol>
+    <li><a href="#problem">The problem</a></li>
+    <li><a href="#shapes">Three data shapes</a></li>
+    <li><a href="#ledger">The content-addressed ledger</a></li>
+    <li><a href="#overlay">The agent's workspace</a></li>
+    <li><a href="#capture">Capture (outbound)</a></li>
+    <li><a href="#sync">Sync (inbound)</a></li>
+    <li><a href="#durability">Durability by class</a></li>
+    <li><a href="#buildvbuy">Build vs buy</a></li>
+    <li><a href="#scale">Scaling to a team</a></li>
+    <li><a href="#limits">Limitations &amp; open questions</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="hero">
+  <div class="col">
+    <p class="kicker">System design · public walkthrough</p>
+    <h1>A shared, durable, versioned workspace for a fleet of agents</h1>
+    <p class="lede">How dozens of AI coding agents — and the humans supervising them — can share lots of files and reconcile their edits, when every agent runs locked inside a sandbox that <em>nothing is allowed to connect into</em>.</p>
+    <div class="meta-row">
+      <span class="pill"><b>Atrium</b> agent platform</span>
+      <span class="pill">Postgres + S3 backing</span>
+      <span class="pill">No-ingress sandboxes</span>
+      <span class="pill">Updated June 2026</span>
+    </div>
+  </div>
+</header>
+
+<section id="problem">
+<div class="col">
+  <h2><span class="num">01</span>The problem</h2>
+  <p class="sub">Many agents, lots of shared files, and a hard isolation constraint.</p>
+
+  <p>Atrium runs <strong>teams of AI agents working in parallel under human oversight</strong>. A realistic session isn't one agent in one repo — it's a dozen agents and several people, all touching an overlapping pool of documents, datasets, notebooks, and code. That creates four requirements that pull against each other:</p>
+  <ul>
+    <li><strong>Durability</strong> — an agent's work must survive a crash, a pause, or the sandbox being destroyed.</li>
+    <li><strong>Freshness</strong> — when a teammate (human or agent) changes a shared file, others should see it quickly, not discover it hours later.</li>
+    <li><strong>Conflict-safety</strong> — if two actors edit the same file at once, <em>neither edit may be silently thrown away</em>.</li>
+    <li><strong>Agent UX</strong> — agents should just <em>write files</em>. No "remember to commit," no version ceremony. The plumbing happens underneath them.</li>
+  </ul>
+
+  <div class="note key">
+    <span class="lbl">The constraint that shapes everything</span>
+    Each agent runs in a <strong>hardened, “no-ingress” sandbox</strong>: it is non-privileged, drops all Linux capabilities, and — critically — <strong>nothing can open a connection <em>into</em> it</strong>. The sandbox can only reach out. That single rule rules out every off-the-shelf file-sync tool (Syncthing, Mutagen, rsync daemons, webhooks) because they all need to connect <em>in</em>. So all synchronization has to be either <em>sandbox-initiated</em> or driven from <em>outside</em> the sandbox entirely.
+  </div>
+</div>
+</section>
+
+<section id="shapes">
+<div class="col">
+  <h2><span class="num">02</span>Three data shapes, three models</h2>
+  <p class="sub">The first design decision: don't force everything into one consistency model.</p>
+
+  <p>Agent work produces three kinds of data, and they want fundamentally different handling. Trying to unify them is the classic mistake.</p>
+
+  <div class="tbl"><table>
+    <tr><th>Shape</th><th>Examples</th><th>Backing</th><th>Merge model</th></tr>
+    <tr><td><strong>Logs</strong></td><td>conversation transcripts, the agent's step-by-step trace</td><td>Postgres event log → sealed S3 segments</td><td><strong>Append-only</strong> — never merged</td></tr>
+    <tr><td><strong>Artifacts</strong></td><td>documents, datasets, reports, notebooks, images</td><td>Content-addressed blobs (S3) + version ledger (Postgres)</td><td><strong>Per-file merge</strong> — versioned, conflict-aware</td></tr>
+    <tr><td><strong>Code</strong></td><td>source repositories</td><td>Git, on the existing forge</td><td><strong>Git</strong> — we coordinate around it, we don't reinvent it</td></tr>
+  </table></div>
+
+  <p>The interesting one is the middle row. Logs are easy (just append). Code is solved (git already exists, and agents already know it). <strong>Artifacts</strong> are where the real work is: files that both humans and agents edit, that need history, that need to be shared across sessions, and that need a sane answer when two edits collide. The rest of this page is mostly about that layer.</p>
+</div>
+</section>
+
+<section id="ledger">
+<div class="col">
+  <h2><span class="num">03</span>The content-addressed ledger</h2>
+  <p class="sub">Git's data model, rebuilt on S3 + Postgres, with one twist for agents.</p>
+
+  <p>The artifact store borrows git's core idea: <strong>immutable content + moveable pointers</strong>. Every version of every file is stored once, addressed by the hash of its bytes (so identical content is automatically de-duplicated). An "edit" never overwrites anything — it writes a new blob and advances a pointer. Old versions are always retrievable.</p>
+
+  <div class="tbl"><table>
+    <tr><th>Layer</th><th>Lives in</th><th>Why</th></tr>
+    <tr><td>Immutable file bytes</td><td><strong>S3</strong>, keyed <code>cas/&lt;sha256&gt;</code></td><td>Object stores are cheap and infinite, but can't do atomic “compare-and-set”</td></tr>
+    <tr><td>Version chain, pointers, conflict state</td><td><strong>Postgres</strong></td><td>A transactional database <em>can</em> do atomic updates — so the moveable parts live here</td></tr>
+  </table></div>
+
+  <h3>The twist: conflicts are <em>state</em>, not errors</h3>
+  <p>Most version systems, when two edits collide, either <strong>block</strong> ("merge failed, fix it before you can continue") or <strong>silently pick a winner</strong> (last-write-wins — the other edit is gone). Both are wrong for autonomous agents: blocking stalls a fleet, and silent loss is unacceptable.</p>
+
+  <p>Atrium follows the model pioneered by the <a href="https://jj-vcs.github.io/jj/" target="_blank" rel="noopener">Jujutsu (jj)</a> version control system: a conflict is a <strong>first-class, recorded version that contains both sides</strong>. The pointer still advances — nothing blocks — but the new “latest” version is explicitly marked <em>conflicted</em> and carries both competing edits. A human or agent resolves it later, as a normal follow-up edit. Nothing is ever lost, and nothing ever stalls.</p>
+
+  <div class="note decision">
+    <span class="lbl">Why build this instead of buying it</span>
+    We evaluated the obvious off-the-shelf option (<a href="https://lakefs.io/" target="_blank" rel="noopener">lakeFS</a>, “git for data”) by actually running it. It only does whole-file merges — a collision returns an error or silently discards a side — and its per-tenant access control is paywalled. The conflict-as-state model and tenant isolation we need are exactly what it can't give, so we'd be rebuilding them on top anyway. <strong>jj has the right model but no open-source cloud backend exists</strong> (the scalable one is Google-internal). So the ledger is our own — but it's small: content-addressed blobs and a version chain are well-understood, and the bytes plumbing reuses infrastructure Atrium already runs.
+  </div>
+</div>
+</section>
+
+<section id="overlay">
+<div class="col">
+  <h2><span class="num">04</span>The agent's workspace</h2>
+  <p class="sub">A copy-on-write filesystem, so the agent writes freely and the change-set is free.</p>
+
+  <p>Inside the sandbox, the agent sees a normal directory at <code>/workspace</code>. Underneath, it's an <strong>overlay filesystem</strong> with three layers:</p>
+
+  <div class="fig">
+    <div class="stack">
+      <div class="layer merged">/workspace &nbsp;<small>— what the agent sees &amp; edits</small></div>
+      <div class="layer upper">upper &nbsp;<small>— this agent's changes (writable, private)</small></div>
+      <div class="layer lower">lower &nbsp;<small>— hydrated shared files + deps (read-only)</small></div>
+    </div>
+    <div class="cap">A write copies the file up into the private <code>upper</code> — the shared base is never touched.</div>
+  </div>
+
+  <p>This buys two things for free. First, the agent gets <strong>full POSIX behaviour</strong> — real renames, locks, partial writes — with no “permission denied” errors, because every write lands in its own private layer. Second, and crucially, the <code>upper</code> layer <em>is</em> the exact set of changes the agent made. There's no need to scan the whole tree to find what changed; the filesystem already separated it out.</p>
+
+  <div class="note key">
+    <span class="lbl">A deliberate scoping trick</span>
+    The overlay covers <strong>only the shared-artifact folders</strong>. Big, noisy directories — <code>node_modules</code>, virtualenvs, build caches, and git repos — are mounted as <em>separate volumes</em>. That means they <strong>structurally can't</strong> bloat the change-set or get captured by accident, no filtering rules required. A dependency install simply isn't in the layer we watch.
+  </div>
+</div>
+</section>
+
+<section id="capture">
+<div class="col">
+  <h2><span class="num">05</span>Capture — getting changes <em>out</em></h2>
+  <p class="sub">A scan that runs outside the sandbox, so the agent stays fully locked down.</p>
+
+  <p>Here's the tension: we want to watch the agent's changes and ship them to durable storage — but the sandbox is hardened and can't run privileged watchers, and (per the constraint) nothing can connect into it to read them out.</p>
+
+  <p>The answer is to move the work <strong>out of the agent and onto the machine</strong>. A privileged <strong>node daemon</strong> — one per physical host, shared by all the agents on it — reads each agent's <code>upper</code> layer directly from the host side:</p>
+
+  <div class="fig">
+    <div class="flow">
+      <div class="box">upper layer<div class="d">only the changed files</div></div>
+      <div class="arrow">→</div>
+      <div class="box node">node daemon<div class="d">reads, interprets, hashes</div></div>
+      <div class="arrow">→</div>
+      <div class="box store">S3 + ledger<div class="d">new version recorded</div></div>
+    </div>
+    <div class="cap">The daemon reads from the host; the agent never runs a watcher and never opens an inbound port.</div>
+  </div>
+
+  <p>Because it reads the change-set rather than the whole tree, the work is proportional to <em>what actually changed</em>, not the size of the workspace. And because there's one daemon per machine rather than one watcher per agent, it scales with the number of hosts, not the number of agents. The daemon also understands the filesystem's encoding for <strong>deletes and renames</strong>, so those are captured faithfully — and since it's trusted infrastructure, it can stream <strong>large files</strong> straight to S3.</p>
+
+  <div class="note decision">
+    <span class="lbl">Verified, not assumed</span>
+    The load-bearing question — “can a fully locked-down agent's writes, through an overlay it doesn't control, be read by a node component?” — was proven end-to-end on a real Linux kernel and a real Kubernetes test cluster before committing to the design.
+  </div>
+</div>
+</section>
+
+<section id="sync">
+<div class="col">
+  <h2><span class="num">06</span>Sync — getting changes <em>in</em></h2>
+  <p class="sub">Freshness without ever connecting into the sandbox.</p>
+
+  <p>The hard direction is inbound. If a teammate edits a shared file, a <em>running</em> agent is still looking at the version it started with — its read-only <code>lower</code> layer is frozen at startup. Left alone, the agent does work on stale data and never finds out. (Our analysis of a busy shared folder found this “acted on stale data, no signal” case is the quiet, common danger — more so than outright collisions.)</p>
+
+  <p>We can't push into the sandbox, so the flow splits across the boundary:</p>
+
+  <div class="tbl"><table>
+    <tr><th>Step</th><th>Runs where</th><th>What happens</th></tr>
+    <tr><td><strong>Fetch &amp; stage</strong></td><td>node (outside)</td><td>The daemon notices the ledger advanced a file this agent is using, fetches the new bytes, and drops them in a side <code>/incoming</code> folder with a marker.</td></tr>
+    <tr><td><strong>Notify</strong></td><td>node → agent</td><td>A lightweight signal: “these paths changed.” The bytes never travel over the agent's input channel — just a pointer.</td></tr>
+    <tr><td><strong>Adopt</strong></td><td>inside, at a safe point</td><td>The agent merges the staged version into its live workspace <em>between</em> steps — never mid-write.</td></tr>
+  </table></div>
+
+  <p>Adoption handles three cases: if the agent <strong>hadn't touched</strong> the file, the new version simply replaces it; if the agent <strong>had edited</strong> it too, a three-way merge runs (clean → merged, otherwise → a recorded conflict); if the agent <strong>deleted</strong> it but someone else edited it, the file is resurrected. The target is that a running agent sees a teammate's change <strong>within seconds</strong>, and an autonomous agent rebases onto it at its next natural checkpoint rather than being interrupted mid-thought.</p>
+</div>
+</section>
+
+<section id="durability">
+<div class="col">
+  <h2><span class="num">07</span>Durability by content class</h2>
+  <p class="sub">One capture mechanism, routed to the right home for each kind of data.</p>
+
+  <p>The node daemon is a single mechanism, but it doesn't force everything into the version ledger — that would be wrong for logs (which churn) and for code (which has its own branch model). It routes by content class:</p>
+
+  <div class="tbl"><table>
+    <tr><th>Content</th><th>Goes to</th><th>Why there</th></tr>
+    <tr><td><strong>Artifacts</strong></td><td>the version ledger</td><td>edited, versioned, shared — the conflict-aware store</td></tr>
+    <tr><td><strong>Uncommitted code edits</strong></td><td>a <strong>patch/diff snapshot</strong> (no git refs)</td><td>keeps work-in-progress durable without touching the repo agents share — see below</td></tr>
+    <tr><td><strong>Logs &amp; transcripts</strong></td><td>packed, sealed S3 segments</td><td>append-only; needed to resume a session, not to version</td></tr>
+  </table></div>
+
+  <div class="note decision">
+    <span class="lbl">Design decision: how to keep uncommitted code safe</span>
+    Uncommitted edits in a code repo also need to survive a crash. The tempting approach — quietly auto-committing them to a hidden git ref — was <strong>rejected</strong>: any automated git activity in a repository a fleet of agents shares risks confusing those agents (unexpected objects, refs, and garbage-collection churn). Instead, the daemon captures work-in-progress as a <strong>plain patch/diff snapshot</strong> stored as an artifact. It creates <em>zero</em> git objects or refs the agent can see, so it can't surprise anyone. The trade-off: recovery means “re-clone and apply this patch,” rather than a native git checkout — an acceptable price for keeping the agent's view of git pristine.
+  </div>
+</div>
+</section>
+
+<section id="buildvbuy">
+<div class="col">
+  <h2><span class="num">08</span>Build vs buy</h2>
+  <p class="sub">Buy the algorithm, borrow the pattern, build the glue.</p>
+
+  <p>A lot of this resembles problems open-source infrastructure already solved — chunking, deduplication, log storage, filesystems over object stores. We deliberately checked each layer (five parallel research passes, hand-computed economics, and a stress-test against real user stories) to avoid reinventing commodity infrastructure. The split that fell out:</p>
+
+  <div class="grid3">
+    <div class="gcard buy">
+      <div class="h"><span class="dot"></span>Buy</div>
+      <p>Mature libraries we adopt directly: a content-defined <strong>chunker</strong> (<code>fastcdc-rs</code>) and Hugging Face's now-open <strong>Xet</strong> de-dup layer for very large files; <strong>Vector</strong> to ship logs; <strong>Parquet</strong> for cold archives.</p>
+    </div>
+    <div class="gcard borrow">
+      <div class="h"><span class="dot"></span>Borrow</div>
+      <p>Well-known <em>patterns</em> we re-implement in a few hundred lines, because adopting the whole product would be overkill: the <strong>log-segment + index</strong> shape, and the <strong>patch-snapshot</strong> idea for work-in-progress.</p>
+    </div>
+    <div class="gcard build">
+      <div class="h"><span class="dot"></span>Build</div>
+      <p>The parts no product offers: the <strong>conflict-state ledger</strong>, the <strong>no-ingress sync</strong>, the <strong>node-side capture</strong>, hydrating the read-only base, and the agent-facing policy (scoping, merge rules, filtering).</p>
+    </div>
+  </div>
+
+  <div class="note key">
+    <span class="lbl">The headline finding</span>
+    <strong>No off-the-shelf system does this combination</strong> — no-ingress, large binaries, versioned-with-merge, multiple data shapes, agent semantics. We surveyed how the leading agent platforms handle it, and the universal answer is “ephemeral sandbox per task + git pull requests” — nobody ships a durable, shared, conflict-aware workspace store. The few products in the neighbourhood are either closed competitors or plain last-write-wins volumes. <strong>The integration is the product.</strong>
+  </div>
+</div>
+</section>
+
+<section id="scale">
+<div class="col">
+  <h2><span class="num">09</span>Scaling to a team or org</h2>
+  <p class="sub">What changes when it's 50–200 agents instead of one.</p>
+
+  <p>The design was sized for fleet scale, and a few numbers drove the choices:</p>
+  <ul>
+    <li><strong>Don't make one storage object per event.</strong> A naive “one object per log line” approach would cost thousands of dollars a month in request fees and create tens of millions of tiny objects a day. Batching log lines into sealed segments before they hit object storage is <strong>~120–300× cheaper</strong> and is the difference between tractable and not.</li>
+    <li><strong>Content-addressing spreads load for free.</strong> Because files are keyed by their hash, writes naturally fan out across hundreds of storage partitions, so the object store's per-partition write limits are a non-issue.</li>
+    <li><strong>Conflicts are real at scale.</strong> On a hot shared folder with dozens of active agents, a meaningful fraction of writes overlap with another in-flight edit. That's exactly why conflict-as-state and fast inbound sync aren't over-engineering — they're load-bearing once sharing is real.</li>
+    <li><strong>De-duplication of large files is deferred on purpose.</strong> Chunk-level de-dup saves 14–34× on big files edited in small increments, but almost nothing on ordinary text. So it's switched on only when large, churny binaries actually dominate storage — and even then we adopt a library rather than write one.</li>
+  </ul>
+
+  <h3>Tenant isolation</h3>
+  <p>The node daemon can read every agent's files on its machine — fine within one team, a real boundary between separate organizations. The plan for true multi-tenancy is a <strong>VM per tenant</strong>: each tenant's agents run on their own virtual machine, so the “can read everything on the host” power is contained by a hardware boundary rather than a software policy. (This is designed but not yet built — see below.)</p>
+</div>
+</section>
+
+<section id="limits">
+<div class="col">
+  <h2><span class="num">10</span>Limitations &amp; open questions</h2>
+  <p class="sub">An honest accounting of what isn't solved.</p>
+
+  <p>This is a design with a working core, not a finished system. The status, roughly:</p>
+  <p style="font-size:14.5px;color:var(--ink-soft)">
+    <span class="status-dot built"></span><strong>Built:</strong> the conflict-state ledger (content-addressed blobs, version chain, conflict storage, write-back, garbage collection) &nbsp;·&nbsp;
+    <span class="status-dot partial"></span><strong>Proven but not productionized:</strong> the node-side capture mechanism &nbsp;·&nbsp;
+    <span class="status-dot designed"></span><strong>Designed, not yet built:</strong> inbound sync, base-layer hydration, multi-tenant VMs
+  </p>
+
+  <h3>Known limitations</h3>
+  <ul>
+    <li><strong>Stale reads have a window.</strong> Fast inbound sync narrows it to seconds, but an agent can still act briefly on data that was superseded between its last sync and its next one. We make the window small and visible; we don't eliminate it.</li>
+    <li><strong>Large files have a ceiling on the in-sandbox path.</strong> The node daemon can stream big files out, but the sandbox-initiated path is capped (~16&nbsp;MiB) until the streaming + chunking layer lands. Fine for documents and small datasets; not yet for multi-gigabyte media.</li>
+    <li><strong>Some conflict resolutions are a product call, not an algorithm.</strong> The clearest example: if one agent deletes a file while another edits it, should it stay deleted or be resurrected? There's no universally correct answer — it needs a deliberate UX decision.</li>
+    <li><strong>Resume depends on a stable base.</strong> When a paused agent comes back, its private edits are re-stacked on a freshly rebuilt read-only base. That base must be byte-identical to the original, or the edits drift. The version manifest makes this tractable, but it's unverified on real hardware.</li>
+    <li><strong>The work-in-progress patch isn't a perfect git mirror.</strong> The patch-snapshot approach (chosen to keep the shared repo pristine) doesn't faithfully capture every exotic git state — an in-progress rebase, say. It's a recovery point, not a clone.</li>
+    <li><strong>Multi-tenant isolation is designed, not deployed.</strong> The VM-per-tenant boundary is the plan; today's single-tenant use doesn't exercise it, and the virtualization density work is future.</li>
+    <li><strong>A privileged node component is a serious surface.</strong> It runs with host privileges and reads many agents' files — which is exactly why the tenant boundary has to be hardware, and why it gets hardened and audited as trusted infrastructure.</li>
+  </ul>
+
+  <h3>Where we're behind the field — on purpose</h3>
+  <p>Competitors ship a couple of polished workflows we have the primitives for but haven't surfaced: <strong>instant whole-environment forking</strong> (“branch this entire agent's machine in a fraction of a second to try an alternative”), and a first-class <strong>“run several agents, keep the best result”</strong> loop. These are UX layers on top of the storage model described here — natural next steps rather than missing foundations.</p>
+
+  <div class="note key">
+    <span class="lbl">The one-sentence summary</span>
+    Give every agent a normal local filesystem to work in; capture and reconcile everything from <em>outside</em> the sandbox through a content-addressed, conflict-aware ledger — so a fleet of agents and their humans can share a workspace without a central server they're allowed to connect to, and without ever silently losing an edit.
+  </div>
+</div>
+</section>
+
+<footer>
+  <div class="col">
+    <p>Atrium — agent workspace architecture. A living design document; details change as the build proceeds. No proprietary credentials or internal endpoints are described here.</p>
+    <p style="color:var(--faint)">Conceptual references: <a href="https://jj-vcs.github.io/jj/" target="_blank" rel="noopener">Jujutsu</a> (conflict-as-state), git (content-addressed storage), <a href="https://lakefs.io/" target="_blank" rel="noopener">lakeFS</a> (evaluated), <a href="https://huggingface.co/blog/xet-on-the-hub" target="_blank" rel="noopener">Xet</a> (large-file de-dup).</p>
+  </div>
+</footer>
+</main>
+</div>
+
+<script>
+  // active-section highlight in the TOC
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a'));
+  var map = {};
+  links.forEach(function(a){ map[a.getAttribute('href').slice(1)] = a; });
+  var obs = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        var a = map[e.target.id]; if(a) a.classList.add('active');
+      }
+    });
+  }, {rootMargin:'-20% 0px -70% 0px', threshold:0});
+  document.querySelectorAll('section[id]').forEach(function(s){ obs.observe(s); });
+</script>
+</body>
+</html>
