@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atrium · Agent Workspace Architecture</title>
-<meta name="description" content="How a fleet of AI agents and their human supervisors share a durable, versioned workspace — the data model, the system topology, the container lifecycle, and the limits — when every agent runs in a sandbox nothing can connect into.">
+<meta name="description" content="How a fleet of AI agents and their human supervisors share a durable, versioned workspace — the data model, the topology, what the agent sees, the container lifecycle, and the limits — when every agent runs in a sandbox nothing can connect into.">
 <style>
   :root{
     --ink:#15171c; --ink-soft:#3a3f4b; --muted:#6b7280; --faint:#9aa1ad;
@@ -98,6 +98,12 @@
   .layer.lower{background:var(--code-bg); color:var(--muted); border-radius:0 0 10px 10px}
   .layer small{color:var(--muted); font-weight:400}
 
+  /* dir tree */
+  .tree{font-family:var(--mono); font-size:12.5px; line-height:1.75; background:var(--code-bg); border-radius:10px;
+        padding:16px 18px; overflow-x:auto; margin:0; color:var(--ink); white-space:pre}
+  .tree b.w{color:var(--green)} .tree b.r{color:var(--teal)}
+  .tree .c{color:var(--faint); font-weight:400}
+
   .flow{display:flex; align-items:stretch; gap:0; flex-wrap:wrap; font-size:13px; justify-content:center}
   .box{flex:1 1 0; min-width:120px; background:var(--card); border:1px solid var(--line); border-radius:11px; padding:13px 12px; text-align:center}
   .box .t{font-weight:650; font-size:13.5px; margin-bottom:3px}
@@ -159,6 +165,7 @@
     <li><a href="#shapes">Three agent-data shapes</a></li>
     <li><a href="#ledger">The content-addressed ledger</a></li>
     <li><a href="#overlay">The agent's workspace</a></li>
+    <li><a href="#agent-view">What the agent sees</a></li>
     <li><a href="#lifecycle">How a container runs</a></li>
     <li><a href="#capture">Capture (outbound)</a></li>
     <li><a href="#sync">Sync (inbound)</a></li>
@@ -224,7 +231,7 @@
       <div class="box store">Postgres<div class="d">durable system of record</div></div>
       <div class="box store">S3 / object store<div class="d">durable file bytes</div></div>
     </div>
-    <div class="cap"><strong>Atrium owns the durable storage</strong> (its own Postgres + S3). Centaur is separate infrastructure that holds only <em>ephemeral</em> staging — which is exactly why Atrium copies bytes out before Centaur's retention evicts them (see §8).</div>
+    <div class="cap"><strong>Atrium owns the durable storage</strong> (its own Postgres + S3). Centaur is separate infrastructure that holds only <em>ephemeral</em> staging — which is exactly why Atrium copies bytes out before Centaur's retention evicts them (see §9).</div>
   </div>
 
   <p>The Atrium server is a single application process that wears several hats: it serves the <strong>REST API</strong> (auth, channels, messages, sessions, artifacts, calls, uploads), runs a <strong>live-update hub</strong> over WebSockets so clients see new messages instantly, streams each agent's output to the browser, and runs background <strong>workers</strong> (speech-to-text, file offload, garbage collection). It talks to Centaur over plain HTTP — outbound only, matching the no-ingress rule.</p>
@@ -347,14 +354,55 @@
 
   <div class="note key">
     <span class="lbl">A deliberate scoping trick</span>
-    The overlay covers <strong>only the shared-artifact folders</strong>. Big, noisy directories — <code>node_modules</code>, virtualenvs, build caches, and git repos — are mounted as <em>separate volumes</em>. That means they <strong>structurally can't</strong> bloat the change-set or get captured by accident, no filtering rules required. A dependency install simply isn't in the layer we watch.
+    The overlay covers <strong>only the shared-artifact folders</strong>. Big, noisy directories — <code>node_modules</code>, virtualenvs, build caches, and git repos — are mounted as <em>separate volumes</em>. That means they <strong>structurally can't</strong> bloat the change-set or get captured by accident, no filtering rules required. A dependency install simply isn't in the layer we watch. The next section lays out the full tree the agent sees.
+  </div>
+</div>
+</section>
+
+<section id="agent-view">
+<div class="col">
+  <h2><span class="num">07</span>What the agent sees</h2>
+  <p class="sub">The agent's-eye view — its whole filesystem, and why it's laid out this way.</p>
+
+  <p>Step back from the machinery and look at what's actually in the agent's filesystem. The guiding principle is <strong>agent UX</strong>: an agent is brilliant at <code>ls</code>, <code>grep</code>, <code>cat</code> over a predictable tree, so we make its whole relevant world a browseable filesystem — and we keep the one weird constraint (no-ingress) entirely out of its way.</p>
+
+  <div class="fig">
+<pre class="tree"><b class="w">/workspace/</b>                      <span class="c"># WRITABLE — your work (the only thing captured)</span>
+  proj-x/   shared/             <span class="c"># shared artifacts — edit freely here</span>
+  scratch/&lt;session&gt;/             <span class="c"># private scratch (never captured)</span>
+  &lt;repo&gt;/                        <span class="c"># code — git owns it (separate volume)</span>
+  node_modules/ .venv/ .cache/   <span class="c"># dependencies (separate volumes; never captured)</span>
+
+<b class="r">/atrium/</b>                         <span class="c"># READ-ONLY — the world (one shared copy per node)</span>
+  README                         <span class="c"># "here's how to read this tree"</span>
+  chat/&lt;channel&gt;/&lt;thread&gt;.md       <span class="c"># Atrium chat — appended live as people talk</span>
+  sessions/&lt;id&gt;/transcript.jsonl  <span class="c"># other agents' traces — live append-tail</span>
+  sessions/&lt;id&gt;/summary.md        <span class="c"># + meta.json (who / what / status)</span>
+  artifacts/&lt;path&gt;               <span class="c"># every shared file, latest version, browseable</span></pre>
+    <div class="cap">Plus a query tool — <code>atrium search · read · log</code> — for fresh, targeted, and workspace-wide lookups beyond what's mounted.</div>
+  </div>
+
+  <h3>Two roots, two jobs</h3>
+  <p><code>/workspace</code> is <strong>my work</strong>: writable, and the only thing the capture system watches. <code>/atrium</code> is <strong>the world</strong>: read-only context — the team's chat, what sibling agents are doing, and every shared artifact at its latest version. Splitting them means the agent never confuses its deliverables with ambient context, and capture has exactly one place to look.</p>
+
+  <h3>Both layered: files to grep, a tool to query</h3>
+  <p>The mounted tree is the <strong>ergonomic default</strong> — zero API to learn, just read files. Alongside it sits a small <strong>query tool</strong> for when the agent needs something targeted or fresher-than-the-mount, or wants to reach the whole workspace's history rather than the slice mounted locally. Browse with the filesystem; reach with the tool.</p>
+
+  <div class="note key">
+    <span class="lbl">Keeping it live, cheaply</span>
+    The context tree is mostly <strong>append-only</strong> (chat and transcripts only ever grow), so keeping it fresh is just <em>appending new lines to the tail</em> of a file — no merge, no conflict, within seconds. And because many agents on one machine see the same context, <code>/atrium</code> is materialized <strong>once per machine and shared</strong> into each sandbox (not re-copied per agent) — which is what makes a workspace-wide view affordable instead of an explosion of duplicate data. How fresh files arrive without anything connecting <em>into</em> the sandbox is the next two sections.
+  </div>
+
+  <div class="note key">
+    <span class="lbl">The whole agent UX, in one line</span>
+    <strong>Read files in <code>/atrium</code>, do work in <code>/workspace</code>, talk in the thread.</strong> No commit ceremony, no sync protocol, no special inbox to poll — steers from humans simply arrive as messages in the conversation the agent is already having.
   </div>
 </div>
 </section>
 
 <section id="lifecycle">
 <div class="col">
-  <h2><span class="num">07</span>How a container runs</h2>
+  <h2><span class="num">08</span>How a container runs</h2>
   <p class="sub">The life of an agent: spawn → execute → mirror → capture → teardown.</p>
 
   <p>When someone (or another agent) starts a session, Atrium asks Centaur to bring up a fresh sandbox and then drives it through a fixed lifecycle. Each agent maps to a durable <strong>thread</strong> on the Centaur side — a stable handle that outlives any single turn, which is what makes pause and resume possible.</p>
@@ -384,14 +432,14 @@
 
   <div class="note key">
     <span class="lbl">The security model, in brief</span>
-    The sandbox is <strong>no-ingress</strong> (nothing connects in) and the agent process is <strong>hardened</strong> (non-root, no privileged capabilities). Secrets never sit inside the sandbox: when an agent needs to reach an external service, its traffic flows through a <strong>credential-injecting proxy</strong> that adds the right token on the way out — so the agent can use a service it can never read the keys for. Anything that needs privilege (mounting the overlay, reading the change-set) is done by the <em>machine</em>, outside the hardened agent — which is the whole basis for how capture works (§8).
+    The sandbox is <strong>no-ingress</strong> (nothing connects in) and the agent process is <strong>hardened</strong> (non-root, no privileged capabilities). Secrets never sit inside the sandbox: when an agent needs to reach an external service, its traffic flows through a <strong>credential-injecting proxy</strong> that adds the right token on the way out — so the agent can use a service it can never read the keys for. Anything that needs privilege (mounting the overlay, reading the change-set, refreshing files) is done by the <em>machine</em>, outside the hardened agent — which is the whole basis for how capture and sync work (§9–§10).
   </div>
 </div>
 </section>
 
 <section id="capture">
 <div class="col">
-  <h2><span class="num">08</span>Capture — getting changes <em>out</em></h2>
+  <h2><span class="num">09</span>Capture — getting changes <em>out</em></h2>
   <p class="sub">A scan that runs outside the sandbox, so the agent stays fully locked down.</p>
 
   <p>Here's the tension: we want to watch the agent's changes and ship them to durable storage — but the sandbox is hardened and can't run privileged watchers, and (per the constraint) nothing can connect into it to read them out.</p>
@@ -413,34 +461,38 @@
 
   <div class="note decision">
     <span class="lbl">Verified, not assumed</span>
-    The load-bearing question — “can a fully locked-down agent's writes, through an overlay it doesn't control, be read by a node component?” — was proven end-to-end on a real Linux kernel and a real Kubernetes test cluster before committing to the design. <em>(This is the target capture mechanism; today's shipped path captures via the agent runtime emitting “captured” frames — §7 step ④. The node-scan is the scalable replacement.)</em>
+    The load-bearing question — “can a fully locked-down agent's writes, through an overlay it doesn't control, be read by a node component?” — was proven end-to-end on a real Linux kernel and a real Kubernetes test cluster before committing to the design. <em>(This is the target capture mechanism; today's shipped path captures via the agent runtime emitting “captured” frames — §8 step ④. The node-scan is the scalable replacement.)</em>
   </div>
 </div>
 </section>
 
 <section id="sync">
 <div class="col">
-  <h2><span class="num">09</span>Sync — getting changes <em>in</em></h2>
-  <p class="sub">Freshness without ever connecting into the sandbox.</p>
+  <h2><span class="num">10</span>Sync — getting changes <em>in</em></h2>
+  <p class="sub">Freshness without the agent ever running a sync protocol.</p>
 
   <p>The hard direction is inbound. If a teammate edits a shared file, a <em>running</em> agent is still looking at the version it started with — its read-only <code>lower</code> layer is frozen at startup. Left alone, the agent does work on stale data and never finds out. (Our analysis of a busy shared folder found this “acted on stale data, no signal” case is the quiet, common danger — more so than outright collisions.)</p>
 
-  <p>We can't push into the sandbox, so the flow splits across the boundary:</p>
+  <p>Because capture already lives on the node (§9), inbound sync lives there too — and <strong>the agent does nothing</strong>. The same node daemon that reads the workspace can also <em>write</em> to it, through the very same shared mount the agent's own edits travel through (the kernel test confirmed this path works across the sandbox boundary). So the node:</p>
+  <ul>
+    <li>polls the ledger for new versions of the files this agent is using;</li>
+    <li>if the agent hasn't touched a file, writes the new version straight into the live workspace;</li>
+    <li>if the agent <em>also</em> edited it, runs the three-way merge from §5 — clean → merged in; otherwise → a recorded conflict version, surfaced as a message rather than a failure;</li>
+    <li>keeps the read-only context tree (chat, sibling transcripts) live by simply <strong>appending new events to the tail</strong> — append-only data needs no merge at all.</li>
+  </ul>
 
-  <div class="tbl"><table>
-    <tr><th>Step</th><th>Runs where</th><th>What happens</th></tr>
-    <tr><td><strong>Fetch &amp; stage</strong></td><td>node (outside)</td><td>The daemon notices the ledger advanced a file this agent is using, fetches the new bytes, and drops them in a side <code>/incoming</code> folder with a marker.</td></tr>
-    <tr><td><strong>Notify</strong></td><td>node → agent</td><td>A lightweight signal: “these paths changed.” The bytes never travel over the agent's input channel — just a pointer.</td></tr>
-    <tr><td><strong>Adopt</strong></td><td>inside, at a safe point</td><td>The agent merges the staged version into its live workspace <em>between</em> steps — never mid-write.</td></tr>
-  </table></div>
+  <div class="note decision">
+    <span class="lbl">Why the node does this, not the agent</span>
+    An earlier design staged updates into an <code>/incoming</code> folder and made <em>in-container</em> code merge them — but that's a strange channel for an agent to poll and a protocol for it to run, which is the opposite of good agent UX. Since the node already reads and writes the workspace, it can do the whole job. The <em>only</em> thing left inside the sandbox is a lightweight “I'm between steps” signal from the harness, so a file never changes in the middle of the agent reading it — and the agent's model never sees even that. The result: the agent just finds files fresh, and humans' steers arrive the natural way, as messages in the thread.
+  </div>
 
-  <p>Adoption handles three cases: if the agent <strong>hadn't touched</strong> the file, the new version simply replaces it; if the agent <strong>had edited</strong> it too, a three-way merge runs (clean → merged, otherwise → a recorded conflict); if the agent <strong>deleted</strong> it but someone else edited it, the file is resurrected. The target is that a running agent sees a teammate's change <strong>within seconds</strong>, and an autonomous agent rebases onto it at its next natural checkpoint rather than being interrupted mid-thought. <em>(This is the next thing to build; the conflict-merge engine it relies on is already shipped.)</em></p>
+  <p>Target: a running agent sees a teammate's change <strong>within seconds</strong>, and an autonomous agent picks it up at its next natural step rather than being interrupted mid-thought. <em>(This is the next thing to build; the three-way-merge engine it relies on is already shipped.)</em></p>
 </div>
 </section>
 
 <section id="durability">
 <div class="col">
-  <h2><span class="num">10</span>Durability by content class</h2>
+  <h2><span class="num">11</span>Durability by content class</h2>
   <p class="sub">One capture mechanism, routed to the right home for each kind of data.</p>
 
   <p>The node daemon is a single mechanism, but it doesn't force everything into the version ledger — that would be wrong for logs (which churn) and for code (which has its own branch model). It routes by content class:</p>
@@ -461,7 +513,7 @@
 
 <section id="artifacts-ui">
 <div class="col">
-  <h2><span class="num">11</span>Working with artifacts</h2>
+  <h2><span class="num">12</span>Working with artifacts</h2>
   <p class="sub">How a human discovers, views, and (eventually) edits what agents produce.</p>
 
   <p>All that versioning is only useful if people can see and use the results. Atrium surfaces artifacts in the client through three connected views, each backed by the ledger:</p>
@@ -492,7 +544,7 @@
 
 <section id="buildvbuy">
 <div class="col">
-  <h2><span class="num">12</span>Build vs buy</h2>
+  <h2><span class="num">13</span>Build vs buy</h2>
   <p class="sub">Buy the algorithm, borrow the pattern, build the glue.</p>
 
   <p>A lot of this resembles problems open-source infrastructure already solved — chunking, deduplication, log storage, filesystems over object stores. We deliberately checked each layer (five parallel research passes, hand-computed economics, and a stress-test against real user stories) to avoid reinventing commodity infrastructure. The split that fell out:</p>
@@ -521,13 +573,14 @@
 
 <section id="scale">
 <div class="col">
-  <h2><span class="num">13</span>Scaling to a team or org</h2>
+  <h2><span class="num">14</span>Scaling to a team or org</h2>
   <p class="sub">What changes when it's 50–200 agents instead of one.</p>
 
   <p>The design was sized for fleet scale, and a few numbers drove the choices:</p>
   <ul>
     <li><strong>Don't make one storage object per event.</strong> A naive “one object per log line” approach would cost thousands of dollars a month in request fees and create tens of millions of tiny objects a day. Batching log lines into sealed segments before they hit object storage is <strong>~120–300× cheaper</strong> and is the difference between tractable and not.</li>
     <li><strong>Content-addressing spreads load for free.</strong> Because files are keyed by their hash, writes naturally fan out across hundreds of storage partitions, so the object store's per-partition write limits are a non-issue.</li>
+    <li><strong>Share the context view per machine.</strong> Projecting every session's chat and logs into every agent <em>separately</em> would be O(agents²) write amplification (~80,000 file-appends/second at 200 agents). Materializing the read-only context <em>once per machine</em> and sharing it into each sandbox collapses that by ~200× — which is what makes a workspace-wide view affordable.</li>
     <li><strong>Conflicts are real at scale.</strong> On a hot shared folder with dozens of active agents, a meaningful fraction of writes overlap with another in-flight edit. That's exactly why conflict-as-state and fast inbound sync aren't over-engineering — they're load-bearing once sharing is real.</li>
     <li><strong>De-duplication of large files is deferred on purpose.</strong> Chunk-level de-dup saves 14–34× on big files edited in small increments, but almost nothing on ordinary text. So it's switched on only when large, churny binaries actually dominate storage — and even then we adopt a library rather than write one.</li>
   </ul>
@@ -539,26 +592,27 @@
 
 <section id="limits">
 <div class="col">
-  <h2><span class="num">14</span>Limitations &amp; open questions</h2>
+  <h2><span class="num">15</span>Limitations &amp; open questions</h2>
   <p class="sub">An honest accounting of what isn't solved.</p>
 
   <p>This is a design with a working core, not a finished system. The status, roughly:</p>
   <p style="font-size:14.5px;color:var(--ink-soft)">
     <span class="status-dot built"></span><strong>Built:</strong> the collaboration spine + chat, the session lifecycle, the conflict-state ledger, the artifact gallery + Work drawer &nbsp;·&nbsp;
     <span class="status-dot partial"></span><strong>Proven but not productionized:</strong> the node-side capture mechanism &nbsp;·&nbsp;
-    <span class="status-dot designed"></span><strong>Designed, not yet built:</strong> inbound sync, base-layer hydration, human artifact editing, multi-tenant VMs
+    <span class="status-dot designed"></span><strong>Designed, not yet built:</strong> inbound sync, the context tree, base-layer hydration, human artifact editing, multi-tenant VMs
   </p>
 
   <h3>Known limitations</h3>
   <ul>
-    <li><strong>Stale reads have a window.</strong> Fast inbound sync narrows it to seconds, but an agent can still act briefly on data that was superseded between its last sync and its next one. We make the window small and visible; we don't eliminate it.</li>
+    <li><strong>The inbound write path needs one more proof.</strong> The kernel test confirmed the agent's writes can be read by the node; inbound sync relies on the <em>reverse</em> (the node writing into the live workspace and the agent seeing it). It should work by the same mechanism, but it hasn't been tested end-to-end yet.</li>
+    <li><strong>Stale reads have a window.</strong> Fast inbound sync narrows it to seconds, but an agent can still act briefly on data that was superseded between one refresh and the next. We make the window small and visible; we don't eliminate it.</li>
     <li><strong>Large files have a ceiling on the in-sandbox path.</strong> The node daemon can stream big files out, but the sandbox-initiated path is capped (~16&nbsp;MiB) until the streaming + chunking layer lands. Fine for documents and small datasets; not yet for multi-gigabyte media.</li>
     <li><strong>Editing artifacts is agent-only for now.</strong> Humans can browse and view, but the click-to-edit UI (and a unified git+ledger “Files” surface) isn't built — the write-back machinery exists, the front door doesn't.</li>
+    <li><strong>Workspace-wide context needs noise control.</strong> Letting every agent see the whole workspace's chat and logs is affordable to <em>store</em> (shared per machine), but it can be <em>noisy</em> to reason over. Scoping by channel/topic/recency is a tuning knob we expect to add, not a solved default.</li>
     <li><strong>Some conflict resolutions are a product call, not an algorithm.</strong> The clearest example: if one agent deletes a file while another edits it, should it stay deleted or be resurrected? There's no universally correct answer — it needs a deliberate UX decision.</li>
     <li><strong>Resume depends on a stable base.</strong> When a paused agent comes back, its private edits are re-stacked on a freshly rebuilt read-only base. That base must be byte-identical to the original, or the edits drift. The version manifest makes this tractable, but it's unverified on real hardware.</li>
-    <li><strong>The work-in-progress patch isn't a perfect git mirror.</strong> The patch-snapshot approach (chosen to keep the shared repo pristine) doesn't faithfully capture every exotic git state — an in-progress rebase, say. It's a recovery point, not a clone.</li>
     <li><strong>Multi-tenant isolation is designed, not deployed.</strong> The VM-per-tenant boundary is the plan; today's single-tenant use doesn't exercise it, and the virtualization density work is future.</li>
-    <li><strong>A privileged node component is a serious surface.</strong> It runs with host privileges and reads many agents' files — which is exactly why the tenant boundary has to be hardware, and why it gets hardened and audited as trusted infrastructure.</li>
+    <li><strong>A privileged node component is a serious surface.</strong> It runs with host privileges and reads (and now writes) many agents' files — which is exactly why the tenant boundary has to be hardware, and why it gets hardened and audited as trusted infrastructure.</li>
   </ul>
 
   <h3>Where we're behind the field — on purpose</h3>
