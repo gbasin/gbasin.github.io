@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Atrium · Agent Workspace Architecture</title>
-<meta name="description" content="How a fleet of AI agents and their human supervisors share a durable, versioned workspace — when every agent runs in a sandbox nothing can connect into.">
+<meta name="description" content="How a fleet of AI agents and their human supervisors share a durable, versioned workspace — the data model, the system topology, the container lifecycle, and the limits — when every agent runs in a sandbox nothing can connect into.">
 <style>
   :root{
     --ink:#15171c; --ink-soft:#3a3f4b; --muted:#6b7280; --faint:#9aa1ad;
@@ -119,6 +119,20 @@
   .legend span{display:inline-flex; align-items:center; gap:6px}
   .legend i{width:10px; height:10px; border-radius:3px; display:inline-block}
 
+  /* tags inside boxes / planes */
+  .tags{display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; justify-content:center}
+  .tags span{font-family:var(--mono); font-size:11px; background:var(--code-bg); border:1px solid var(--line); border-radius:6px; padding:2px 7px; color:var(--ink-soft)}
+  .plane{display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:4px 0}
+  @media(max-width:600px){.plane{grid-template-columns:1fr}}
+  .pcol{border:1px solid var(--line); border-radius:12px; padding:15px 16px; background:var(--card)}
+  .pcol .role{font-family:var(--mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--faint); display:block}
+  .pcol h4{margin:3px 0 8px; font-size:15px}
+  .pcol.control{border-top:3px solid var(--accent)}
+  .pcol.data{border-top:3px solid var(--teal)}
+  .pcol ul{margin:6px 0 0; padding-left:18px; font-size:14px; color:var(--ink-soft)}
+  .pcol li{margin:5px 0}
+  .planefoot{text-align:center; font-size:12.5px; color:var(--muted); margin-top:14px}
+
   footer{border-top:1px solid var(--line); margin-top:50px; padding:30px 0; color:var(--muted); font-size:13.5px}
   .status-dot{display:inline-block; width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:1px}
   .built{background:var(--green)} .designed{background:var(--amber)} .partial{background:var(--accent)}
@@ -140,12 +154,16 @@
   <div class="tag">Agent workspace design</div>
   <ol>
     <li><a href="#problem">The problem</a></li>
-    <li><a href="#shapes">Three data shapes</a></li>
+    <li><a href="#topology">How it all fits together</a></li>
+    <li><a href="#spine">The collaboration spine</a></li>
+    <li><a href="#shapes">Three agent-data shapes</a></li>
     <li><a href="#ledger">The content-addressed ledger</a></li>
     <li><a href="#overlay">The agent's workspace</a></li>
+    <li><a href="#lifecycle">How a container runs</a></li>
     <li><a href="#capture">Capture (outbound)</a></li>
     <li><a href="#sync">Sync (inbound)</a></li>
     <li><a href="#durability">Durability by class</a></li>
+    <li><a href="#artifacts-ui">Working with artifacts</a></li>
     <li><a href="#buildvbuy">Build vs buy</a></li>
     <li><a href="#scale">Scaling to a team</a></li>
     <li><a href="#limits">Limitations &amp; open questions</a></li>
@@ -157,7 +175,7 @@
   <div class="col">
     <p class="kicker">System design · public walkthrough</p>
     <h1>A shared, durable, versioned workspace for a fleet of agents</h1>
-    <p class="lede">How dozens of AI coding agents — and the humans supervising them — can share lots of files and reconcile their edits, when every agent runs locked inside a sandbox that <em>nothing is allowed to connect into</em>.</p>
+    <p class="lede">How dozens of AI coding agents — and the humans supervising them — share files, chat in the same threads, and reconcile their edits, when every agent runs locked inside a sandbox that <em>nothing is allowed to connect into</em>.</p>
     <div class="meta-row">
       <span class="pill"><b>Atrium</b> agent platform</span>
       <span class="pill">Postgres + S3 backing</span>
@@ -172,12 +190,12 @@
   <h2><span class="num">01</span>The problem</h2>
   <p class="sub">Many agents, lots of shared files, and a hard isolation constraint.</p>
 
-  <p>Atrium runs <strong>teams of AI agents working in parallel under human oversight</strong>. A realistic session isn't one agent in one repo — it's a dozen agents and several people, all touching an overlapping pool of documents, datasets, notebooks, and code. That creates four requirements that pull against each other:</p>
+  <p>Atrium runs <strong>teams of AI agents working in parallel under human oversight</strong>. A realistic session isn't one agent in one repo — it's a dozen agents and several people, chatting in shared channels and touching an overlapping pool of documents, datasets, notebooks, and code. That creates four requirements that pull against each other:</p>
   <ul>
     <li><strong>Durability</strong> — an agent's work must survive a crash, a pause, or the sandbox being destroyed.</li>
     <li><strong>Freshness</strong> — when a teammate (human or agent) changes a shared file, others should see it quickly, not discover it hours later.</li>
     <li><strong>Conflict-safety</strong> — if two actors edit the same file at once, <em>neither edit may be silently thrown away</em>.</li>
-    <li><strong>Agent UX</strong> — agents should just <em>write files</em>. No "remember to commit," no version ceremony. The plumbing happens underneath them.</li>
+    <li><strong>Agent UX</strong> — agents should just <em>write files</em> and <em>post messages</em>. No "remember to commit," no version ceremony. The plumbing happens underneath them.</li>
   </ul>
 
   <div class="note key">
@@ -187,12 +205,91 @@
 </div>
 </section>
 
+<section id="topology">
+<div class="col">
+  <h2><span class="num">02</span>How it all fits together</h2>
+  <p class="sub">The map before the mechanisms: clients, the Atrium server, and the agent runtime.</p>
+
+  <p>Three pieces make up the system. The <strong>clients</strong> (a web app and a mobile app) are what people look at. The <strong>Atrium server</strong> is the hub everything flows through — it holds the database, the file storage, and the live connections to clients. And <strong>Centaur</strong> is the separate runtime that actually runs the agents, in sandboxes, on its own machines.</p>
+
+  <div class="fig">
+    <div class="flow">
+      <div class="box">Clients<div class="d">web &amp; mobile</div><div class="tags"><span>REST</span><span>WebSocket</span><span>SSE</span></div></div>
+      <div class="arrow">↔</div>
+      <div class="box node">Atrium server<div class="d">the hub</div><div class="tags"><span>API</span><span>live-update hub</span><span>workers</span></div></div>
+      <div class="arrow">→</div>
+      <div class="box">Centaur<div class="d">agent runtime</div><div class="tags"><span>sandbox A</span><span>sandbox B</span><span>…</span></div></div>
+    </div>
+    <div class="flow" style="margin-top:14px">
+      <div class="box store">Postgres<div class="d">durable system of record</div></div>
+      <div class="box store">S3 / object store<div class="d">durable file bytes</div></div>
+    </div>
+    <div class="cap"><strong>Atrium owns the durable storage</strong> (its own Postgres + S3). Centaur is separate infrastructure that holds only <em>ephemeral</em> staging — which is exactly why Atrium copies bytes out before Centaur's retention evicts them (see §8).</div>
+  </div>
+
+  <p>The Atrium server is a single application process that wears several hats: it serves the <strong>REST API</strong> (auth, channels, messages, sessions, artifacts, calls, uploads), runs a <strong>live-update hub</strong> over WebSockets so clients see new messages instantly, streams each agent's output to the browser, and runs background <strong>workers</strong> (speech-to-text, file offload, garbage collection). It talks to Centaur over plain HTTP — outbound only, matching the no-ingress rule.</p>
+
+  <div class="note key">
+    <span class="lbl">Two systems, one boundary</span>
+    Keep this split in mind for everything below: <strong>Atrium</strong> is the durable, human-facing system (database, storage, UI, coordination). <strong>Centaur</strong> is the disposable, agent-facing runtime (sandboxes, execution). The interesting engineering lives on the seam between them — getting work safely <em>out</em> of the disposable side and into the durable side.
+  </div>
+</div>
+</section>
+
+<section id="spine">
+<div class="col">
+  <h2><span class="num">03</span>The collaboration spine</h2>
+  <p class="sub">Chat, threads, and sessions all hang off one append-only event log.</p>
+
+  <p>Before any agent runs, there's the human layer: people talking in channels, replying in threads, reacting, and spawning agents. In Atrium this isn't a pile of separate tables — it's <strong>one append-only event log that is the source of truth</strong>. A message posted, a message edited, a reaction added, an agent spawned, a question answered — each is an <em>event</em> appended to the log. The channel list, the unread counts, the “who's online” — those are lightweight views computed <em>from</em> the log, not the truth themselves.</p>
+
+  <p>This has some nice properties. Editing a message doesn't mutate it in place — it appends an “edited” event that supersedes the original; a delete is a tombstone event. Reactions are “added”/“removed” events whose net is summed on read. Nothing is destructively overwritten, so the full history is always reconstructable. (The one exception: <strong>presence and typing indicators are ephemeral</strong> — they live only in the live-update hub's memory, never in the log, because nobody needs to replay who was typing last Tuesday.)</p>
+
+  <h3>Sessions are the bridge</h3>
+  <p>A <strong>session</strong> is the key object that ties humans to agents: it's an agent run <em>and</em> a pane in the workspace at the same time. Each session belongs to a channel, threads its activity under a root message, and maps one-to-one to a single agent in Centaur. Humans collaborate on a running session by proposing steers and answering the agent's questions — and those proposals are themselves recorded, so the back-and-forth of supervising an agent becomes part of the durable record.</p>
+
+  <h3>Control plane vs data plane</h3>
+  <p>The cleanest way to hold the whole system in your head is two planes. The <strong>collaboration spine</strong> (the event log) is the <em>control plane</em> — coordination, conversation, who-asked-for-what. The <strong>artifact ledger</strong> (the next few sections) is the <em>data plane</em> — the actual files being produced and versioned. Humans and agents both write to both, and the two reference each other: an artifact knows which session produced it; a session lives in a thread in a channel.</p>
+
+  <div class="fig">
+    <div class="plane">
+      <div class="pcol control">
+        <span class="role">Control plane</span>
+        <h4>The collaboration spine</h4>
+        <ul>
+          <li>One append-only <strong>event log</strong></li>
+          <li>messages · edits · reactions · threads</li>
+          <li>sessions · steers · answered questions</li>
+          <li><em>views:</em> channels, unread counts, presence</li>
+        </ul>
+      </div>
+      <div class="pcol data">
+        <span class="role">Data plane</span>
+        <h4>The artifact ledger</h4>
+        <ul>
+          <li>Content-addressed <strong>file versions</strong></li>
+          <li>documents · datasets · reports · notebooks</li>
+          <li>version chains · pointers · conflict state</li>
+          <li><em>backed by:</em> S3 bytes + Postgres metadata</li>
+        </ul>
+      </div>
+    </div>
+    <div class="planefoot">Humans <strong>and</strong> agents write to both planes. Every artifact points back to the session (and thus the thread) that produced it.</div>
+  </div>
+
+  <div class="note key">
+    <span class="lbl">There are actually two logs</span>
+    The chat spine is one log. Each agent <em>also</em> emits a raw, harness-specific transcript (its own step-by-step trace), mirrored into a <strong>separate</strong> per-session log. The server's “tailer” reads that raw stream and folds the <em>meaningful</em> moments (a message to show, a status change, a captured file) into the chat spine — so humans see a clean conversation while the full raw trace is preserved for resume and audit. The next sections follow that raw stream out of the sandbox.
+  </div>
+</div>
+</section>
+
 <section id="shapes">
 <div class="col">
-  <h2><span class="num">02</span>Three data shapes, three models</h2>
-  <p class="sub">The first design decision: don't force everything into one consistency model.</p>
+  <h2><span class="num">04</span>Three agent-data shapes</h2>
+  <p class="sub">What agents <em>produce</em> splits into three kinds — and they want different handling.</p>
 
-  <p>Agent work produces three kinds of data, and they want fundamentally different handling. Trying to unify them is the classic mistake.</p>
+  <p>If the collaboration spine (§3) is the control plane, the data plane is everything agents generate. It splits into three shapes, and trying to force them into one consistency model is the classic mistake.</p>
 
   <div class="tbl"><table>
     <tr><th>Shape</th><th>Examples</th><th>Backing</th><th>Merge model</th></tr>
@@ -201,13 +298,13 @@
     <tr><td><strong>Code</strong></td><td>source repositories</td><td>Git, on the existing forge</td><td><strong>Git</strong> — we coordinate around it, we don't reinvent it</td></tr>
   </table></div>
 
-  <p>The interesting one is the middle row. Logs are easy (just append). Code is solved (git already exists, and agents already know it). <strong>Artifacts</strong> are where the real work is: files that both humans and agents edit, that need history, that need to be shared across sessions, and that need a sane answer when two edits collide. The rest of this page is mostly about that layer.</p>
+  <p>Logs are easy (just append). Code is solved (git already exists, and agents already know it). <strong>Artifacts</strong> are where the real work is: files that both humans and agents edit, that need history, that need to be shared across sessions, and that need a sane answer when two edits collide. The rest of this page is mostly about that layer.</p>
 </div>
 </section>
 
 <section id="ledger">
 <div class="col">
-  <h2><span class="num">03</span>The content-addressed ledger</h2>
+  <h2><span class="num">05</span>The content-addressed ledger</h2>
   <p class="sub">Git's data model, rebuilt on S3 + Postgres, with one twist for agents.</p>
 
   <p>The artifact store borrows git's core idea: <strong>immutable content + moveable pointers</strong>. Every version of every file is stored once, addressed by the hash of its bytes (so identical content is automatically de-duplicated). An "edit" never overwrites anything — it writes a new blob and advances a pointer. Old versions are always retrievable.</p>
@@ -221,7 +318,7 @@
   <h3>The twist: conflicts are <em>state</em>, not errors</h3>
   <p>Most version systems, when two edits collide, either <strong>block</strong> ("merge failed, fix it before you can continue") or <strong>silently pick a winner</strong> (last-write-wins — the other edit is gone). Both are wrong for autonomous agents: blocking stalls a fleet, and silent loss is unacceptable.</p>
 
-  <p>Atrium follows the model pioneered by the <a href="https://jj-vcs.github.io/jj/" target="_blank" rel="noopener">Jujutsu (jj)</a> version control system: a conflict is a <strong>first-class, recorded version that contains both sides</strong>. The pointer still advances — nothing blocks — but the new “latest” version is explicitly marked <em>conflicted</em> and carries both competing edits. A human or agent resolves it later, as a normal follow-up edit. Nothing is ever lost, and nothing ever stalls.</p>
+  <p>Atrium follows the model pioneered by the <a href="https://jj-vcs.github.io/jj/" target="_blank" rel="noopener">Jujutsu (jj)</a> version control system: a conflict is a <strong>first-class, recorded version that contains both sides</strong>. The pointer still advances — nothing blocks — but the new “latest” version is explicitly marked <em>conflicted</em> and carries both competing edits. A human or agent resolves it later, as a normal follow-up edit. Nothing is ever lost, and nothing ever stalls. <em>(This part is built: the server already does three-way merges and records conflict versions.)</em></p>
 
   <div class="note decision">
     <span class="lbl">Why build this instead of buying it</span>
@@ -232,7 +329,7 @@
 
 <section id="overlay">
 <div class="col">
-  <h2><span class="num">04</span>The agent's workspace</h2>
+  <h2><span class="num">06</span>The agent's workspace</h2>
   <p class="sub">A copy-on-write filesystem, so the agent writes freely and the change-set is free.</p>
 
   <p>Inside the sandbox, the agent sees a normal directory at <code>/workspace</code>. Underneath, it's an <strong>overlay filesystem</strong> with three layers:</p>
@@ -255,9 +352,46 @@
 </div>
 </section>
 
+<section id="lifecycle">
+<div class="col">
+  <h2><span class="num">07</span>How a container runs</h2>
+  <p class="sub">The life of an agent: spawn → execute → mirror → capture → teardown.</p>
+
+  <p>When someone (or another agent) starts a session, Atrium asks Centaur to bring up a fresh sandbox and then drives it through a fixed lifecycle. Each agent maps to a durable <strong>thread</strong> on the Centaur side — a stable handle that outlives any single turn, which is what makes pause and resume possible.</p>
+
+  <div class="fig">
+    <div class="flow">
+      <div class="box">① Spawn<div class="d">create the session + sandbox</div></div>
+      <div class="arrow">→</div>
+      <div class="box">② Execute<div class="d">run one agent turn</div></div>
+      <div class="arrow">→</div>
+      <div class="box node">③ Mirror<div class="d">stream output back</div></div>
+      <div class="arrow">→</div>
+      <div class="box store">④ Capture<div class="d">files → ledger</div></div>
+      <div class="arrow">→</div>
+      <div class="box store">⑤ Offload<div class="d">bytes → durable S3</div></div>
+    </div>
+    <div class="cap">A turn can run for a long time; pausing tears the container down but keeps the thread, so a later turn <em>resumes</em> rather than starting over.</div>
+  </div>
+
+  <ol>
+    <li><strong>Spawn</strong> — Atrium writes the session record and a “session spawned” event, then asks Centaur to create the sandbox for that thread.</li>
+    <li><strong>Execute</strong> — a message is posted to the agent and a single <em>turn</em> begins. The session tracks which turn is currently live.</li>
+    <li><strong>Mirror</strong> — Atrium <em>tails</em> the agent's raw output stream and, frame by frame, records it to the per-session log and folds the meaningful parts into the chat spine and the live-update hub. This is how a running agent's work shows up in the UI in real time.</li>
+    <li><strong>Capture</strong> — when the agent produces a file, a “captured” frame creates a new version in the ledger (§5).</li>
+    <li><strong>Offload</strong> — a background worker copies the captured bytes out of Centaur's <em>ephemeral</em> staging into Atrium's <em>durable</em> S3, before Centaur's retention can evict them.</li>
+  </ol>
+
+  <div class="note key">
+    <span class="lbl">The security model, in brief</span>
+    The sandbox is <strong>no-ingress</strong> (nothing connects in) and the agent process is <strong>hardened</strong> (non-root, no privileged capabilities). Secrets never sit inside the sandbox: when an agent needs to reach an external service, its traffic flows through a <strong>credential-injecting proxy</strong> that adds the right token on the way out — so the agent can use a service it can never read the keys for. Anything that needs privilege (mounting the overlay, reading the change-set) is done by the <em>machine</em>, outside the hardened agent — which is the whole basis for how capture works (§8).
+  </div>
+</div>
+</section>
+
 <section id="capture">
 <div class="col">
-  <h2><span class="num">05</span>Capture — getting changes <em>out</em></h2>
+  <h2><span class="num">08</span>Capture — getting changes <em>out</em></h2>
   <p class="sub">A scan that runs outside the sandbox, so the agent stays fully locked down.</p>
 
   <p>Here's the tension: we want to watch the agent's changes and ship them to durable storage — but the sandbox is hardened and can't run privileged watchers, and (per the constraint) nothing can connect into it to read them out.</p>
@@ -279,14 +413,14 @@
 
   <div class="note decision">
     <span class="lbl">Verified, not assumed</span>
-    The load-bearing question — “can a fully locked-down agent's writes, through an overlay it doesn't control, be read by a node component?” — was proven end-to-end on a real Linux kernel and a real Kubernetes test cluster before committing to the design.
+    The load-bearing question — “can a fully locked-down agent's writes, through an overlay it doesn't control, be read by a node component?” — was proven end-to-end on a real Linux kernel and a real Kubernetes test cluster before committing to the design. <em>(This is the target capture mechanism; today's shipped path captures via the agent runtime emitting “captured” frames — §7 step ④. The node-scan is the scalable replacement.)</em>
   </div>
 </div>
 </section>
 
 <section id="sync">
 <div class="col">
-  <h2><span class="num">06</span>Sync — getting changes <em>in</em></h2>
+  <h2><span class="num">09</span>Sync — getting changes <em>in</em></h2>
   <p class="sub">Freshness without ever connecting into the sandbox.</p>
 
   <p>The hard direction is inbound. If a teammate edits a shared file, a <em>running</em> agent is still looking at the version it started with — its read-only <code>lower</code> layer is frozen at startup. Left alone, the agent does work on stale data and never finds out. (Our analysis of a busy shared folder found this “acted on stale data, no signal” case is the quiet, common danger — more so than outright collisions.)</p>
@@ -300,13 +434,13 @@
     <tr><td><strong>Adopt</strong></td><td>inside, at a safe point</td><td>The agent merges the staged version into its live workspace <em>between</em> steps — never mid-write.</td></tr>
   </table></div>
 
-  <p>Adoption handles three cases: if the agent <strong>hadn't touched</strong> the file, the new version simply replaces it; if the agent <strong>had edited</strong> it too, a three-way merge runs (clean → merged, otherwise → a recorded conflict); if the agent <strong>deleted</strong> it but someone else edited it, the file is resurrected. The target is that a running agent sees a teammate's change <strong>within seconds</strong>, and an autonomous agent rebases onto it at its next natural checkpoint rather than being interrupted mid-thought.</p>
+  <p>Adoption handles three cases: if the agent <strong>hadn't touched</strong> the file, the new version simply replaces it; if the agent <strong>had edited</strong> it too, a three-way merge runs (clean → merged, otherwise → a recorded conflict); if the agent <strong>deleted</strong> it but someone else edited it, the file is resurrected. The target is that a running agent sees a teammate's change <strong>within seconds</strong>, and an autonomous agent rebases onto it at its next natural checkpoint rather than being interrupted mid-thought. <em>(This is the next thing to build; the conflict-merge engine it relies on is already shipped.)</em></p>
 </div>
 </section>
 
 <section id="durability">
 <div class="col">
-  <h2><span class="num">07</span>Durability by content class</h2>
+  <h2><span class="num">10</span>Durability by content class</h2>
   <p class="sub">One capture mechanism, routed to the right home for each kind of data.</p>
 
   <p>The node daemon is a single mechanism, but it doesn't force everything into the version ledger — that would be wrong for logs (which churn) and for code (which has its own branch model). It routes by content class:</p>
@@ -320,14 +454,45 @@
 
   <div class="note decision">
     <span class="lbl">Design decision: how to keep uncommitted code safe</span>
-    Uncommitted edits in a code repo also need to survive a crash. The tempting approach — quietly auto-committing them to a hidden git ref — was <strong>rejected</strong>: any automated git activity in a repository a fleet of agents shares risks confusing those agents (unexpected objects, refs, and garbage-collection churn). Instead, the daemon captures work-in-progress as a <strong>plain patch/diff snapshot</strong> stored as an artifact. It creates <em>zero</em> git objects or refs the agent can see, so it can't surprise anyone. The trade-off: recovery means “re-clone and apply this patch,” rather than a native git checkout — an acceptable price for keeping the agent's view of git pristine.
+    Uncommitted edits in a code repo also need to survive a crash. The tempting approach — quietly auto-committing them to a hidden git ref — was <strong>rejected</strong>: any automated git activity in a repository a fleet of agents shares risks confusing those agents (unexpected objects, refs, and garbage-collection churn). Instead, the daemon captures work-in-progress as a <strong>plain patch/diff snapshot</strong> (a read-only “what changed since the last commit”) stored as an artifact. It creates <em>zero</em> git objects or refs the agent can see, so it can't surprise anyone. The trade-off: recovery means “re-clone and apply this patch,” rather than a native git checkout — an acceptable price for keeping the agent's view of git pristine.
+  </div>
+</div>
+</section>
+
+<section id="artifacts-ui">
+<div class="col">
+  <h2><span class="num">11</span>Working with artifacts</h2>
+  <p class="sub">How a human discovers, views, and (eventually) edits what agents produce.</p>
+
+  <p>All that versioning is only useful if people can see and use the results. Atrium surfaces artifacts in the client through three connected views, each backed by the ledger:</p>
+
+  <div class="fig">
+    <div class="flow">
+      <div class="box">Discover<div class="d">the gallery — one tile per file, newest first, with a version count</div></div>
+      <div class="arrow">→</div>
+      <div class="box node">View<div class="d">open a tile → fetch the latest bytes by path</div></div>
+      <div class="arrow">→</div>
+      <div class="box store">Edit<div class="d">write a new version back to the ledger</div></div>
+    </div>
+    <div class="cap">Discovery and viewing are shipped; human-facing editing is the open piece (today, writes come from agents and inbound sync).</div>
+  </div>
+
+  <ul>
+    <li><strong>The gallery</strong> collapses every captured file to a single tile <em>per path</em> — newest version wins, with a small <code>v3</code>-style badge showing how many versions exist and a tag for new/changed/deleted. Images thumbnail; everything else shows a type label.</li>
+    <li><strong>The Work drawer</strong> is a tabbed surface — <strong>Changes</strong> (file edits grouped by path, with diffs), <strong>Side-effects</strong> (shell operations grouped by category — network, package installs, git, filesystem — with risk badges, as a post-hoc audit), and <strong>Artifacts</strong> — that you can peek at as an overlay, pin to a side pane, or detach into its own tab.</li>
+    <li><strong>Viewing</strong> resolves a path to its latest version and either redirects to the file in S3 or proxies it from Centaur's staging if it hasn't been offloaded yet.</li>
+  </ul>
+
+  <div class="note limit">
+    <span class="lbl">Honest status</span>
+    On the human side, artifact views are <strong>read-only today</strong>. The write-back path (with the three-way-merge conflict handling from §5) exists on the server, but it's currently driven by <em>agents</em> and the inbound-sync flow — there's no click-to-edit UI on a tile yet. Human-facing editing, and a unified “Files” surface spanning both git-backed repo files and ledger-backed artifacts, are designed but not yet built.
   </div>
 </div>
 </section>
 
 <section id="buildvbuy">
 <div class="col">
-  <h2><span class="num">08</span>Build vs buy</h2>
+  <h2><span class="num">12</span>Build vs buy</h2>
   <p class="sub">Buy the algorithm, borrow the pattern, build the glue.</p>
 
   <p>A lot of this resembles problems open-source infrastructure already solved — chunking, deduplication, log storage, filesystems over object stores. We deliberately checked each layer (five parallel research passes, hand-computed economics, and a stress-test against real user stories) to avoid reinventing commodity infrastructure. The split that fell out:</p>
@@ -356,7 +521,7 @@
 
 <section id="scale">
 <div class="col">
-  <h2><span class="num">09</span>Scaling to a team or org</h2>
+  <h2><span class="num">13</span>Scaling to a team or org</h2>
   <p class="sub">What changes when it's 50–200 agents instead of one.</p>
 
   <p>The design was sized for fleet scale, and a few numbers drove the choices:</p>
@@ -374,20 +539,21 @@
 
 <section id="limits">
 <div class="col">
-  <h2><span class="num">10</span>Limitations &amp; open questions</h2>
+  <h2><span class="num">14</span>Limitations &amp; open questions</h2>
   <p class="sub">An honest accounting of what isn't solved.</p>
 
   <p>This is a design with a working core, not a finished system. The status, roughly:</p>
   <p style="font-size:14.5px;color:var(--ink-soft)">
-    <span class="status-dot built"></span><strong>Built:</strong> the conflict-state ledger (content-addressed blobs, version chain, conflict storage, write-back, garbage collection) &nbsp;·&nbsp;
+    <span class="status-dot built"></span><strong>Built:</strong> the collaboration spine + chat, the session lifecycle, the conflict-state ledger, the artifact gallery + Work drawer &nbsp;·&nbsp;
     <span class="status-dot partial"></span><strong>Proven but not productionized:</strong> the node-side capture mechanism &nbsp;·&nbsp;
-    <span class="status-dot designed"></span><strong>Designed, not yet built:</strong> inbound sync, base-layer hydration, multi-tenant VMs
+    <span class="status-dot designed"></span><strong>Designed, not yet built:</strong> inbound sync, base-layer hydration, human artifact editing, multi-tenant VMs
   </p>
 
   <h3>Known limitations</h3>
   <ul>
     <li><strong>Stale reads have a window.</strong> Fast inbound sync narrows it to seconds, but an agent can still act briefly on data that was superseded between its last sync and its next one. We make the window small and visible; we don't eliminate it.</li>
     <li><strong>Large files have a ceiling on the in-sandbox path.</strong> The node daemon can stream big files out, but the sandbox-initiated path is capped (~16&nbsp;MiB) until the streaming + chunking layer lands. Fine for documents and small datasets; not yet for multi-gigabyte media.</li>
+    <li><strong>Editing artifacts is agent-only for now.</strong> Humans can browse and view, but the click-to-edit UI (and a unified git+ledger “Files” surface) isn't built — the write-back machinery exists, the front door doesn't.</li>
     <li><strong>Some conflict resolutions are a product call, not an algorithm.</strong> The clearest example: if one agent deletes a file while another edits it, should it stay deleted or be resurrected? There's no universally correct answer — it needs a deliberate UX decision.</li>
     <li><strong>Resume depends on a stable base.</strong> When a paused agent comes back, its private edits are re-stacked on a freshly rebuilt read-only base. That base must be byte-identical to the original, or the edits drift. The version manifest makes this tractable, but it's unverified on real hardware.</li>
     <li><strong>The work-in-progress patch isn't a perfect git mirror.</strong> The patch-snapshot approach (chosen to keep the shared repo pristine) doesn't faithfully capture every exotic git state — an in-progress rebase, say. It's a recovery point, not a clone.</li>
@@ -400,7 +566,7 @@
 
   <div class="note key">
     <span class="lbl">The one-sentence summary</span>
-    Give every agent a normal local filesystem to work in; capture and reconcile everything from <em>outside</em> the sandbox through a content-addressed, conflict-aware ledger — so a fleet of agents and their humans can share a workspace without a central server they're allowed to connect to, and without ever silently losing an edit.
+    Give every agent a normal local filesystem to work in and a shared thread to talk in; capture and reconcile everything from <em>outside</em> the sandbox through a content-addressed, conflict-aware ledger — so a fleet of agents and their humans can share a workspace without a central server they're allowed to connect to, and without ever silently losing an edit.
   </div>
 </div>
 </section>
